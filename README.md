@@ -1,8 +1,6 @@
 # aws-rds-7day-autostop
 # Goal
-Monitor RDS Events servers auto started due to 7-day rule, "RDS-EVENT-0154 The DB instance is being started due to it exceeding the maximum allowed time being stopped.", and stop them.
-
-## AWS Architecture
+Monitor RDS Events servers auto started due to 7-day rule and stop them. AWS auto starts RDS after a maxiumu allowed time being stopped of 7 days.  This can go unnoticed generating signifant AWS charges.
 ![Image of CloudWatch](https://github.com/jimzucker/aws-rds-7day-autostop/blob/main/images/aws_architecture.png)
 
 ## User Story
@@ -20,7 +18,7 @@ As an AWS Solution Architect I want to monitor for RDS being auto-started by AWS
 There are 3 components
 
 ## 1. Lambda listenting to SNS
-A lambda that monitors events from RDS on an SNS topic and ignores all events except 'RDS-EVENT-0154'. It then triggers a Step Function.
+A lambda that monitors events from RDS on an SNS topic and ignores all events except 'RDS-EVENT-0154'. It then triggers a Step Function. The event processed is,  "RDS-EVENT-0154 The DB instance is being started due to it exceeding the maximum allowed time being stopped", all other events are ignored.
 
 ## 2. Step Function to orchestrate the process
 The step function will call another lambda to actually stop the instance.  We used a step function here for 2 reasons:
@@ -40,6 +38,8 @@ This cloudwatch log demonstrates why we needed to use the step function to sleep
 
 ![Image of CloudWatch](https://github.com/jimzucker/aws-rds-7day-autostop/blob/main/images/cloudwatch_not_avail.png)
 
+# Testing
+If you create an rds names 'rds-stop-test', then all events will be processed for this instance to allow you to test simply by starting the instance, it should automatically be stopped by the step function.
 
 
 
