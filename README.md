@@ -1,12 +1,12 @@
 # aws-rds-7day-autostop
 # Goal
-Monitor RDS Events servers auto started due to 7-day rule, "RDS-EVENT-0154 The DB instance is being started due to it exceeding the maximum allowed time being stopped.", and stop them. Implemented using AWS Lambda and Step Function.
+Monitor RDS Events servers auto started due to 7-day rule, "RDS-EVENT-0154 The DB instance is being started due to it exceeding the maximum allowed time being stopped.", and stop them.
 
 ## AWS Architecture
 ![Image of CloudWatch](https://github.com/jimzucker/aws-rds-7day-autostop/blob/main/images/aws_architecture.png)
 
 ## User Story
-As an AWS Solution Architect I want to monitor for RDS being auto-started by AWS due to it exceedn the maximum allows time being stopped so that I can stop them automatically  to follow the 'Well Architected' principal of 'Cost Optimization'.
+As an AWS Solution Architect I want to monitor for RDS being auto-started by AWS due to it exceedn the maximum allows time being stopped so that I can stop them automatically to achieve the 'Well Architected' pillar of 'Cost Optimization'.
 
 ![Image of CloudWatch](https://github.com/jimzucker/aws-rds-7day-autostop/blob/main/images/cloudwatch_autostop.png)
 
@@ -28,6 +28,8 @@ b. Overall this operation can take longer that the max time for a lambda and the
 
 
 ### Example of api failing when server not 'available'
+This cloudwatch log demonstrates why we needed to use the step function to sleep and retry interatively until the server is available.
+
 ![Image of CloudWatch](https://github.com/jimzucker/aws-rds-7day-autostop/blob/main/images/cloudwatch_not_avail.png)
 
 
