@@ -1,0 +1,21 @@
+{
+    "Records": [
+        {
+            "EventSource": "aws:sns",
+            "EventVersion": "1.0",
+            "EventSubscriptionArn": "arn:aws:sns:us-east-1:XXXXXXXXX:rdsNotifcationTopic:XXXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXXXXX",
+            "Sns": {
+                "Type": "Notification",
+                "MessageId": "4dbe8cd2-9245-58bd-a9d9-d4e839c714dc",
+                "TopicArn": "arn:aws:sns:us-east-1:XXXXXXXXX:rdsNotifcationTopic",
+                "Subject": "RDS Notification Message",
+                "Message": "{\"Event Source\":\"db-instance\",\"Event Time\":\"2020-11-27 07:22:41.245\",\"Identifier Link\":\"https://console.aws.amazon.com/rds/home?region=us-east-1#dbinstance:id=rds-stop-test\",\"Source ID\":\"rds-stop-test\",\"Source ARN\":\"arn:aws:rds:us-east-1:XXXXXXXXX:db:rds-stop-test\",\"Event ID\":\"http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_Events.html#RDS-EVENT-0154\",\"Event Message\":\"DB instance is being started due to it exceeding the maximum allowed time being stopped.\"}",
+                "Timestamp": "2020-11-27T07:22:42.343Z",
+                "SignatureVersion": "1",
+                "Signature": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+                "SigningCertUrl": "https://sns.us-east-1.amazonaws.com/SimpleNotificationService-XXXXXXXXXXXXXXXXXXX.pem",
+                "UnsubscribeUrl": "https://sns.us-east-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:us-east-1:XXXXXXXXX:rdsNotifcationTopic:XXXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXXXXX",
+                "MessageAttributes": {}
+            }
+        }
+    ]

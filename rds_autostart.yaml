@@ -1,0 +1,384 @@
+#
+# Cloud formation to create step fuction that monitors RDS events to auto shutdown servers started due to 7 day max stop rule in AWS.
+# Written by: Jim Zucker
+# Date: Nov 25, 2020
+
+# References
+#  Notification RDS-EVENT-0154 The DB instance is being started due to it exceeding the maximum allowed time being stopped.
+#  Execute step function: https://meetrix.io/blog/aws/07-passing-data-between-lambda-in-aws-step-function.html
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Trap notification RDS-EVENT-0154 "The DB instance is being started due to it exceeding the maximum allowed time being stopped" and stop instance.
+
+
+################################################################################################
+## Lambda to listen to events
+##
+## This lambda is triggers by the event from RDS
+## and his only job is to start the state machine
+##
+################################################################################################
+
+Resources:
+  #create a role for lambda
+  rdsAutoStopFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:*
+            Resource: arn:aws:logs:*:*:*
+          - Effect: Allow
+            Action:
+            - "states:StartExecution"
+            Resource: !Ref rdsAutoStopStateMachine
+      ManagedPolicyArns:
+      - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      - 'arn:aws:iam::aws:policy/AmazonSQSFullAccess'
+
+  rdsAutoStopLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: rdsAutoStopLambda
+      Role: !GetAtt rdsAutoStopFunctionRole.Arn
+      Timeout: 900
+      Handler: index.handler
+      Runtime: python3.6
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import traceback
+          import os
+          def handler(event, context):
+            try:
+              print(json.dumps(event))
+              #RDS-EVENT-0154: DB instance is being started due to it exceeding the maximum allowed time being stopped.
+              auto_started_event_id="RDS-EVENT-0154"
+
+              #this is for debuggins
+              debug_instance="rds-stop-test"
+
+              state_machine = os.environ['RDS_STATE_MACHINE_ARN']
+              message = json.loads(event['Records'][0]['Sns']['Message'])
+              rds_name = message['Source ID']
+              event_id = message['Event ID'].split('#')[1]     
+              event_message = message['Event Message']         
+              print("rds_name={} / event_id={} / event_message={}".format(rds_name,event_id,event_message) )
+
+              #for debugging
+              if rds_name == debug_instance :
+                print(json.dumps(event))
+                print(state_machine)
+
+              #
+              # trigger if we are not stopping and its and auto_started_event or debug_instance
+              #
+              if event_id == auto_started_event_id or rds_name == debug_instance :
+                client = boto3.client('stepfunctions')
+                response = client.start_execution(
+                  stateMachineArn=state_machine,
+                  input=json.dumps(event)
+                )
+              return
+            except Exception as e:
+              traceback.print_exc()
+
+      Description: Trigger a Step Function to run.  
+      Environment:
+        Variables:
+          RDS_STATE_MACHINE_ARN: !Ref rdsAutoStopStateMachine
+
+  rdsAutoStopLambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref rdsAutoStopLambda
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref rdsNotifcationTopic
+
+  # if you dont define this it will get created but will have a indefinite retention
+  # so we define it to ensure lgos roll
+  rdsAutoStopLambdaLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${rdsAutoStopLambda}"
+      RetentionInDays: '7'
+################################################################################################
+
+
+################################################################################################
+## SNS Topic & event Listner
+## Setup SNS Topic to listen to RDS events an trigger rdsAutoStopLambdaLogGroup:
+################################################################################################
+
+  #Topic for Lambda to listen to
+  rdsNotifcationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: rdsNotifcationTopic
+      TopicName: rdsNotifcationTopic
+      Subscription:
+      - Endpoint: !GetAtt rdsAutoStopLambda.Arn
+        Protocol: lambda
+
+  #ask RDS to publish all notifications
+  rdsNotifyEventsSubscription: 
+    Type: AWS::RDS::EventSubscription
+    Properties: 
+      Enabled: true
+      EventCategories: 
+        - notification
+      SnsTopicArn: !Ref rdsNotifcationTopic
+      SourceType: db-instance
+
+
+  # create Queue for retry if we time out to make sure the instance stops
+  # This is because the server is often in 'not availalbe state' because it was just started
+  rdsAutoStopRetrySQSQueue:
+    Type: 'AWS::SQS::Queue'
+
+  rdsAutoStopLambdsSQSPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref 'rdsAutoStopRetrySQSQueue']
+      PolicyDocument:
+        Version: '2008-10-17'
+        Id: PublicationPolicy1
+        Statement:
+        - Sid: Allow-Lambda-SendMessage
+          Effect: Allow
+          Principal: "*"
+          Action: "sqs:*"
+          Resource: "*"
+          Condition:
+            ArnEquals:
+              aws:SourceArn: !Ref 'rdsAutoStopLambda'
+################################################################################################
+
+
+################################################################################################
+## Worker lambda
+## This Lamdba does all the work, when called from the State Machine
+################################################################################################
+  rdsAutoStopWorkerFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:*
+            Resource: arn:aws:logs:*:*:*
+          - Effect: Allow
+            Action:
+            - rds:DescribeDbInstances
+            - rds:StopDbInstance
+            Resource: "*"
+      ManagedPolicyArns:
+      - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      - 'arn:aws:iam::aws:policy/AmazonSQSFullAccess'
+
+  rdsAutoStopLambdaWorker:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: rdsAutoStopLambdaWorker
+      Role: !GetAtt rdsAutoStopWorkerFunctionRole.Arn
+      Timeout: 30
+      Handler: index.handler
+      Runtime: python3.6
+      Code:
+        ZipFile: |
+          import json
+          import traceback
+          import time
+          import boto3
+          def handler(event, context):
+            #RDS-EVENT-0154: DB instance is being started due to it exceeding the maximum allowed time being stopped.
+            auto_started_event_id="RDS-EVENT-0154"
+            debug_instance="rds-stop-test"
+            
+            try:
+              message = json.loads(event['Records'][0]['Sns']['Message'])
+              rds_name = message['Source ID']
+              event_id = message['Event ID'].split('#')[1]
+              event_message = message['Event Message']         
+
+              client = boto3.client('rds')
+              response = client.describe_db_instances(DBInstanceIdentifier=rds_name)
+              status = response['DBInstances'][0]['DBInstanceStatus'] 
+              print("rds_name={} / event_id={} / event_message={} / status={}".format(rds_name,event_id, event_message, status) )
+
+              # if it is stopped we are done
+              if status != "stopped" :
+                client.stop_db_instance(DBInstanceIdentifier=rds_name)
+              return
+
+            except Exception as e:
+              traceback.print_exc()
+              raise e
+
+      Description: Stop RDS if it is autostarted.
+
+  # if you dont define this it will get created but will have a indefinite retention
+  # so we define it to ensure lgos roll
+  rdsAutoStopLambdaWorkderLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${rdsAutoStopLambdaWorker}"
+      RetentionInDays: '7'
+################################################################################################
+
+
+################################################################################################
+## Step Function State Machine
+## Because stoping an RDS has to wait until its running use a state machine
+## to keep calling lambda until it can be stopped. (We need the step function because labmda 
+## could time out)
+################################################################################################
+  rdsAutoStopStatesExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: !Sub "states.${AWS::Region}.amazonaws.com"
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: StepFunctionExecRole
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            - lambda:ListFunctions
+            Resource: !GetAtt [ rdsAutoStopLambdaWorker, Arn ]
+          - Effect: Allow
+            Action:
+            - logs:CreateLogDelivery
+            - logs:GetLogDelivery
+            - logs:UpdateLogDelivery
+            - logs:DeleteLogDelivery
+            - logs:ListLogDeliveries
+            - logs:PutResourcePolicy
+            - logs:DescribeResourcePolicies
+            - logs:DescribeLogGroups
+            Resource: "*"
+
+  rdsAutoStopStateMachineLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: "/aws/lambda/rdsAutoStopStateMachine"
+      RetentionInDays: '7'
+
+
+  #
+  # keep trying 7 times or about 2 hours
+  # until the worker lambda succeeds in its mission
+  #  
+  #
+  rdsAutoStopStateMachine:
+    Type: "AWS::StepFunctions::StateMachine"
+    Properties:
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt rdsAutoStopStateMachineLogGroup.Arn
+        IncludeExecutionData: True
+        Level: ALL
+      DefinitionString:
+        !Sub
+          - |-
+            {
+              "Comment": "Step function to stop RDS and wait until its done",
+              "StartAt": "rdsStop",
+              "States": {
+                "rdsStop": {
+                  "Type": "Task",
+                  "Resource": "${lambdaArn}",
+                  "Retry": [
+                    {
+                      "ErrorEquals": [
+                        "States.TaskFailed", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"
+                      ],
+                      "IntervalSeconds": 60,
+                      "MaxAttempts": 7,
+                      "BackoffRate": 2
+                    }
+                  ],
+                  "End": true
+                }
+              }
+            }
+          - {lambdaArn: !GetAtt [ rdsAutoStopLambdaWorker, Arn ]}
+      RoleArn: !GetAtt [ rdsAutoStopStatesExecutionRole, Arn ]
+################################################################################################
+
+
+Outputs:
+  rdsNotifcationTopicArn:
+    Value: !Ref rdsNotifcationTopic
+  rdsNotifyEventsSubscription:
+    Value: !Ref rdsNotifyEventsSubscription
+  rdsAutoStopLambdaArn:
+    Value: !GetAtt rdsAutoStopLambda.Arn
+  rdsAutoStopFunctionRoleArn:
+    Value: !GetAtt rdsAutoStopFunctionRole.Arn
+  rdsAutoStopRetrySQSQueueArn:
+    Value: !GetAtt rdsAutoStopRetrySQSQueue.Arn
+  rdsAutoStopLambdsSQSPolicy:
+    Value: !Ref rdsAutoStopLambdsSQSPolicy
+  rdsAutoStopStateMachine:
+    Value: !Ref rdsAutoStopStateMachine
+  rdsAutoStopStatesExecutionRole:
+    Value: !Ref rdsAutoStopStatesExecutionRole
