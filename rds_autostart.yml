@@ -82,9 +82,14 @@ Resources:
           import boto3
           import traceback
           import os
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
           def handler(event, context):
             try:
-              print(json.dumps(event))
+              logger.info(f"Received event: {json.dumps(event)}")
               #RDS-EVENT-0154: DB instance is being started due to it exceeding the maximum allowed time being stopped.
               auto_started_event_id="RDS-EVENT-0154"
 
@@ -96,12 +101,13 @@ Resources:
               rds_name = message['Source ID']
               event_id = message['Event ID'].split('#')[1]     
               event_message = message['Event Message']         
-              print("rds_name={} / event_id={} / event_message={}".format(rds_name,event_id,event_message) )
+              logger.info(f"rds_name={rds_name} / event_id={event_id} / event_message={event_message}")
 
               #for debugging
               if rds_name == debug_instance :
-                print(json.dumps(event))
-                print(state_machine)
+                logger.info(f"Debugging instance: {debug_instance}")
+                logger.info(f"Event: {json.dumps(event)}")
+                logger.info(f"State machine ARN: {state_machine}")
 
               #
               # trigger if we are not stopping and its and auto_started_event or debug_instance
@@ -112,9 +118,11 @@ Resources:
                   stateMachineArn=state_machine,
                   input=json.dumps(event)
                 )
-              return
+                logger.info(f"Started execution of state machine {state_machine}: {response}")
+
             except Exception as e:
-              traceback.print_exc()
+              logger.error(f"An error occurred: {str(e)}")
+              logger.error(traceback.format_exc())
 
       Description: Trigger a Step Function to run.  
       Environment:
@@ -238,6 +246,11 @@ Resources:
           import traceback
           import time
           import boto3
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
           def handler(event, context):
             #RDS-EVENT-0154: DB instance is being started due to it exceeding the maximum allowed time being stopped.
             auto_started_event_id="RDS-EVENT-0154"
@@ -256,10 +269,14 @@ Resources:
 
               # if it is stopped we are done
               if status != "stopped" :
-                client.stop_db_instance(DBInstanceIdentifier=rds_name)
-              return
+                response = client.stop_db_instance(DBInstanceIdentifier=rds_name)
+                if response['DBInstance']['DBInstanceStatus'] != 'stopped':
+                  logger.warning(f"Could not stop RDS instance '{rds_name}'")
+                else:
+                  logger.info(f"Successfully stopped RDS instance '{rds_name}'")
 
             except Exception as e:
+              logger.error(f"An error occurred while stopping RDS instance '{rds_name}': {e}")
               traceback.print_exc()
               raise e
 
