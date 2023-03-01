@@ -269,11 +269,8 @@ Resources:
 
               # if it is stopped we are done
               if status != "stopped" :
-                response = client.stop_db_instance(DBInstanceIdentifier=rds_name)
-                if response['DBInstance']['DBInstanceStatus'] != 'stopped':
-                  logger.warning(f"Could not stop RDS instance '{rds_name}'")
-                else:
-                  logger.info(f"Successfully stopped RDS instance '{rds_name}'")
+                client.stop_db_instance(DBInstanceIdentifier=rds_name)
+              return
 
             except Exception as e:
               logger.error(f"An error occurred while stopping RDS instance '{rds_name}': {e}")
